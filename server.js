@@ -16,6 +16,9 @@ const clients = new Map();
 // Job queue: id → { target, accountNo, bankName, sentBy, status, createdAt }
 const jobs = new Map();
 
+// KBiz Result store: sentBy → { accountNo, bankName, holderName, ts }
+const kbizResults = new Map();
+
 // ===== HTTP =====
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -127,6 +130,42 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
       }
     });
+    return;
+  }
+
+  // ─── POST /api/kbiz-result  (KBiz ส่งชื่อเจ้าของบัญชีกลับมา) ────────
+  if (req.method === 'POST' && url === '/api/kbiz-result') {
+    let body = '';
+    req.on('data', d => body += d);
+    req.on('end', () => {
+      try {
+        const { sentBy, accountNo, bankName, holderName } = JSON.parse(body);
+        if (!holderName || !accountNo) {
+          res.writeHead(400); res.end(JSON.stringify({ ok: false, error: 'Missing fields' })); return;
+        }
+        kbizResults.set(sentBy || 'default', { accountNo, bankName, holderName, ts: Date.now() });
+        console.log(`[KBiz Result] ${sentBy} → ${holderName} | ${accountNo}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch(e) {
+        res.writeHead(400); res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  // ─── GET /api/kbiz-result  (ฝั่ง admin poll ชื่อกลับ) ────────────────
+  if (req.method === 'GET' && url === '/api/kbiz-result') {
+    // หา result ล่าสุดที่ยังไม่เกิน 30 วิ
+    const now = Date.now();
+    let latest = null;
+    for (const [, r] of kbizResults) {
+      if (now - r.ts < 30000) {
+        if (!latest || r.ts > latest.ts) latest = r;
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(latest || {}));
     return;
   }
 
