@@ -16,6 +16,9 @@ const clients = new Map();
 // Job queue: id → { target, accountNo, bankName, sentBy, status, createdAt }
 const jobs = new Map();
 
+// Result retry queue: sentBy → [payload, ...] — เก็บผลที่ยังส่งไม่ได้ รอ reconnect
+const pendingResults = new Map();
+
 // KBiz Result store (legacy poll-based, เก็บไว้เผื่อใช้): sentBy → { accountNo, bankName, holderName, ts }
 const kbizResults = new Map();
 
@@ -26,6 +29,30 @@ function sendWS(name, payload) {
     return true;
   }
   return false;
+}
+
+// ส่ง result กลับ — ถ้า offline ให้เก็บไว้รอ reconnect (10 นาที)
+function sendResult(name, payload) {
+  const sent = sendWS(name, payload);
+  if (!sent) {
+    if (!pendingResults.has(name)) pendingResults.set(name, []);
+    pendingResults.get(name).push({ payload, ts: Date.now() });
+    console.log(`[PendingResult] queued for ${name} (${pendingResults.get(name).length} pending)`);
+  }
+  return sent;
+}
+
+// flush pending results เมื่อ client reconnect
+function flushPendingResults(name, ws) {
+  const queue = pendingResults.get(name);
+  if (!queue || queue.length === 0) return;
+  const now = Date.now();
+  const fresh = queue.filter(r => now - r.ts < 600000); // ทิ้งของเก่าเกิน 10 นาที
+  fresh.forEach(r => {
+    try { ws.send(JSON.stringify(r.payload)); } catch(e) {}
+  });
+  pendingResults.delete(name);
+  if (fresh.length) console.log(`[PendingResult] flushed ${fresh.length} results to ${name}`);
 }
 
 // ===== HTTP =====
@@ -88,7 +115,7 @@ const server = http.createServer((req, res) => {
           // ★ ใหม่: ส่งผลกลับไปหา "ผู้ส่ง" (sentBy) แบบ real-time ผ่าน WS
           // ฝั่ง BO (KBiz BankLookup) ต้อง register ด้วยชื่อเดียวกับ "myName" ที่ใช้ส่ง (sentBy)
           if (job.sentBy) {
-            sendWS(job.sentBy, {
+            sendResult(job.sentBy, {
               type: 'result',
               id,
               status: job.status,
@@ -205,6 +232,9 @@ wss.on('connection', (ws) => {
         clients.set(name, ws);
         console.log(`[WS] registered: ${name} (total: ${clients.size})`);
         ws.send(JSON.stringify({ type: 'registered', name }));
+
+        // flush ผลที่ค้างรออยู่ (กรณี server ส่งไม่ได้ตอน client offline)
+        flushPendingResults(name, ws);
 
         // ส่ง pending jobs ที่มีอยู่แล้วทันที (กรณีนี้คือชื่อนี้เป็น "target"/ฝั่ง KBiz)
         const pending = [...jobs.values()].filter(j => j.target === name && j.status === 'pending');
