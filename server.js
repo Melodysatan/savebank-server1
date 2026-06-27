@@ -77,11 +77,12 @@ const server = http.createServer((req, res) => {
     req.on('data', d => body += d);
     req.on('end', () => {
       try {
-        const { status, message, recipientName } = JSON.parse(body || '{}');
+        const { status, message, recipientName, recipientBank } = JSON.parse(body || '{}');
         const job = jobs.get(id);
         if (job) {
           job.status = status || 'done';
           job.recipientName = recipientName || null;
+          job.recipientBank = recipientBank || null;
           job.message = message || null;
           job.doneAt = Date.now(); // ★ ใช้สำหรับ polling fallback
           console.log(`[Done] ${id} → ${status} | ${recipientName || ''}`);
@@ -96,6 +97,7 @@ const server = http.createServer((req, res) => {
               accountNo: job.accountNo,
               bankName: job.bankName,
               recipientName: job.recipientName,
+              recipientBank: job.recipientBank,
               target: job.target,
               ts: Date.now()
             });
@@ -132,6 +134,7 @@ const server = http.createServer((req, res) => {
       accountNo: latest.accountNo,
       bankName: latest.bankName,
       recipientName: latest.recipientName || null,
+      recipientBank: latest.recipientBank || null,
       message: latest.message || null,
       ts: latest.doneAt || Date.now()
     }));
@@ -245,7 +248,7 @@ wss.on('connection', (ws) => {
         doneForMe.forEach(j => {
           ws.send(JSON.stringify({
             type: 'result', id: j.id, status: j.status, accountNo: j.accountNo,
-            bankName: j.bankName, recipientName: j.recipientName || null, target: j.target, ts: Date.now()
+            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null, target: j.target, ts: Date.now()
           }));
         });
         return;
