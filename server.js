@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
           job.status = status || 'done';
           job.recipientName = recipientName || null;
           job.recipientBank = recipientBank || null;
-          job.recipientImage = recipientImage || null;
+          // ไม่เก็บรูปใน job — ประหยัด memory + bandwidth
           job.message = message || null;
           job.doneAt = Date.now(); // ★ ใช้สำหรับ polling fallback
           console.log(`[Done] ${id} → ${status} | ${recipientName || ''}`);
@@ -99,7 +99,6 @@ const server = http.createServer((req, res) => {
               bankName: job.bankName,
               recipientName: job.recipientName,
               recipientBank: job.recipientBank,
-              recipientImage: job.recipientImage,
               target: job.target,
               ts: Date.now()
             });
@@ -137,7 +136,7 @@ const server = http.createServer((req, res) => {
       bankName: latest.bankName,
       recipientName: latest.recipientName || null,
       recipientBank: latest.recipientBank || null,
-      recipientImage: latest.recipientImage || null,
+      // recipientImage: ไม่ส่งผ่าน polling — ส่งผ่าน WS ครั้งเดียวเท่านั้น
       message: latest.message || null,
       ts: latest.doneAt || Date.now()
     }));
@@ -251,7 +250,7 @@ wss.on('connection', (ws) => {
         doneForMe.forEach(j => {
           ws.send(JSON.stringify({
             type: 'result', id: j.id, status: j.status, accountNo: j.accountNo,
-            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null, recipientImage: j.recipientImage || null, target: j.target, ts: Date.now()
+            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null, target: j.target, ts: Date.now()
           }));
         });
         return;
