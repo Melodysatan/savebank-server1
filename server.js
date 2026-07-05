@@ -81,12 +81,12 @@ const server = http.createServer((req, res) => {
         const job = jobs.get(id);
         if (job) {
           job.status = status || 'done';
-          job.recipientName = recipientName || null;
-          job.recipientBank = recipientBank || null;
-          job.recipientImage = recipientImage || null;
+          job.recipientName = recipientName || job.recipientName || null;
+          job.recipientBank = recipientBank || job.recipientBank || null;
+          if (recipientImage) job.recipientImage = recipientImage; // ★ อัปเดตรูปเฉพาะเมื่อมีค่าใหม่ ไม่ทับด้วย null
           job.message = message || null;
-          job.doneAt = Date.now(); // ★ ใช้สำหรับ polling fallback
-          console.log(`[Done] ${id} → ${status} | ${recipientName || ''}`);
+          job.doneAt = Date.now();
+          console.log(`[Done] ${id} → ${status} | ${recipientName || ''}${recipientImage ? ' [+รูป]' : ''}`);
 
           // ★ ใหม่: ส่งผลกลับไปหา "ผู้ส่ง" (sentBy) แบบ real-time ผ่าน WS
           // ฝั่ง BO (KBiz BankLookup) ต้อง register ด้วยชื่อเดียวกับ "myName" ที่ใช้ส่ง (sentBy)
@@ -99,7 +99,7 @@ const server = http.createServer((req, res) => {
               bankName: job.bankName,
               recipientName: job.recipientName,
               recipientBank: job.recipientBank,
-              recipientImage: recipientImage || null,
+              recipientImage: job.recipientImage || null,
               target: job.target,
               ts: Date.now()
             });
