@@ -77,12 +77,15 @@ const server = http.createServer((req, res) => {
     req.on('data', d => body += d);
     req.on('end', () => {
       try {
-        const { status, message, recipientName } = JSON.parse(body || '{}');
+        const { status, message, recipientName, recipientBank, recipientImage } = JSON.parse(body || '{}');
         const job = jobs.get(id);
         if (job) {
           job.status = status || 'done';
           job.recipientName = recipientName || null;
+          job.recipientBank = recipientBank || null;
+          job.recipientImage = recipientImage || null;
           job.message = message || null;
+          job.doneAt = Date.now(); // ★ ใช้สำหรับ polling fallback
           console.log(`[Done] ${id} → ${status} | ${recipientName || ''}`);
 
           // ★ ใหม่: ส่งผลกลับไปหา "ผู้ส่ง" (sentBy) แบบ real-time ผ่าน WS
@@ -95,6 +98,8 @@ const server = http.createServer((req, res) => {
               accountNo: job.accountNo,
               bankName: job.bankName,
               recipientName: job.recipientName,
+              recipientBank: job.recipientBank,
+              recipientImage: recipientImage || null,
               target: job.target,
               ts: Date.now()
             });
@@ -109,6 +114,33 @@ const server = http.createServer((req, res) => {
         res.writeHead(400); res.end(JSON.stringify({ ok: false }));
       }
     });
+    return;
+  }
+
+  // ─── GET /api/result/:name  (★ polling fallback — เผื่อ WS หลุด ก็ยังได้ผลภายใน ≤5 วิ) ───
+  const resultMatch = url.match(/^\/api\/result\/(.+)$/);
+  if (req.method === 'GET' && resultMatch) {
+    const name = decodeURIComponent(resultMatch[1]);
+    let latest = null;
+    for (const job of jobs.values()) {
+      if (job.sentBy !== name) continue;
+      if (job.status !== 'done' && job.status !== 'error') continue;
+      if (!latest || (job.doneAt || 0) > (latest.doneAt || 0)) latest = job;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (!latest) { res.end(JSON.stringify({ found: false })); return; }
+    res.end(JSON.stringify({
+      found: true,
+      id: latest.id,
+      status: latest.status,
+      accountNo: latest.accountNo,
+      bankName: latest.bankName,
+      recipientName: latest.recipientName || null,
+      recipientBank: latest.recipientBank || null,
+      recipientImage: latest.recipientImage || null,
+      message: latest.message || null,
+      ts: latest.doneAt || Date.now()
+    }));
     return;
   }
 
@@ -219,7 +251,7 @@ wss.on('connection', (ws) => {
         doneForMe.forEach(j => {
           ws.send(JSON.stringify({
             type: 'result', id: j.id, status: j.status, accountNo: j.accountNo,
-            bankName: j.bankName, recipientName: j.recipientName || null, target: j.target, ts: Date.now()
+            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null, target: j.target, ts: Date.now()
           }));
         });
         return;
