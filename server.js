@@ -1,4 +1,4 @@
-// ===== savebank-server — server.js (v2: broadcast results back to sender) =====
+// ===== savebank-server — server.js (v2.1: broadcast results back to sender + no-silent-expiry) =====
 // รองรับทั้ง:
 //   KBiz AutoFill v11        → /api/send, /api/poll/:name, /api/done/:id, /api/status
 //   KBiz BankLookup (BO)     → /api/send, /api/status, WS register (รับผลกลับ real-time)
@@ -19,6 +19,10 @@ const jobs = new Map();
 // KBiz Result store (legacy poll-based, เก็บไว้เผื่อใช้): sentBy → { accountNo, bankName, holderName, ts }
 const kbizResults = new Map();
 
+// ★ เวลาสูงสุดที่ job จะรอผลได้ก่อนถูกถือว่า "หมดเวลา" — นานกว่าตอนแรก (10 นาที) พอสมควร
+// เผื่อคิวยาว/KBiz ช้า และเมื่อหมดเวลาจะ "แจ้งเตือนผู้ส่งก่อนลบ" แทนที่จะลบเงียบๆ
+const JOB_MAX_AGE = 900000; // 15 นาที
+
 function sendWS(name, payload) {
   const ws = clients.get(name);
   if (ws && ws.readyState === 1) {
@@ -26,6 +30,35 @@ function sendWS(name, payload) {
     return true;
   }
   return false;
+}
+
+// ★ ถ้า job หมดเวลาโดยยังไม่ done/error ให้แจ้งผู้ส่งก่อนลบ ไม่ให้ผลลัพธ์หายเงียบ
+function scheduleExpiry(job) {
+  setTimeout(() => {
+    const current = jobs.get(job.id);
+    if (!current) return; // ถูกจัดการ/ลบไปแล้ว (เช่น done ปกติ)
+    if (current.status !== 'done' && current.status !== 'error') {
+      current.status = 'error';
+      current.message = 'หมดเวลารอผลจาก KBiz (job expired)';
+      console.log(`[Expire] ${current.id} → expired (สถานะก่อนหน้า: ${job.status})`);
+      if (current.sentBy) {
+        sendWS(current.sentBy, {
+          type: 'result',
+          id: current.id,
+          status: 'error',
+          accountNo: current.accountNo,
+          bankName: current.bankName,
+          recipientName: null,
+          recipientBank: null,
+          recipientImage: null,
+          message: current.message,
+          target: current.target,
+          ts: Date.now()
+        });
+      }
+    }
+    jobs.delete(job.id);
+  }, JOB_MAX_AGE);
 }
 
 // ===== HTTP =====
@@ -88,7 +121,7 @@ const server = http.createServer((req, res) => {
           job.doneAt = Date.now();
           console.log(`[Done] ${id} → ${status} | ${recipientName || ''}${recipientImage ? ' [+รูป]' : ''}`);
 
-          // ★ ใหม่: ส่งผลกลับไปหา "ผู้ส่ง" (sentBy) แบบ real-time ผ่าน WS
+          // ★ ส่งผลกลับไปหา "ผู้ส่ง" (sentBy) แบบ real-time ผ่าน WS
           // ฝั่ง BO (KBiz BankLookup) ต้อง register ด้วยชื่อเดียวกับ "myName" ที่ใช้ส่ง (sentBy)
           if (job.sentBy) {
             sendWS(job.sentBy, {
@@ -105,7 +138,7 @@ const server = http.createServer((req, res) => {
             });
           }
 
-          // ลบหลัง 5 นาที
+          // ลบหลัง 5 นาที (job เสร็จแล้ว ไม่ต้องรอ scheduleExpiry อีก)
           setTimeout(() => jobs.delete(id), 300000);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -161,7 +194,8 @@ const server = http.createServer((req, res) => {
         const job = { id, target, accountNo, bankName, sentBy: sentBy || 'unknown', status: 'pending', createdAt: Date.now() };
         jobs.set(id, job);
 
-        setTimeout(() => jobs.delete(id), 600000);
+        // ★ แทนที่ setTimeout ลบทิ้งเฉยๆ ด้วย scheduleExpiry ที่แจ้งผู้ส่งก่อนลบถ้ายังไม่มีผล
+        scheduleExpiry(job);
 
         console.log(`[Send] ${sentBy} → ${target} | ${accountNo} ${bankName} | id=${id}`);
 
@@ -251,7 +285,8 @@ wss.on('connection', (ws) => {
         doneForMe.forEach(j => {
           ws.send(JSON.stringify({
             type: 'result', id: j.id, status: j.status, accountNo: j.accountNo,
-            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null, target: j.target, ts: Date.now()
+            bankName: j.bankName, recipientName: j.recipientName || null, recipientBank: j.recipientBank || null,
+            recipientImage: j.recipientImage || null, message: j.message || null, target: j.target, ts: Date.now()
           }));
         });
         return;
@@ -269,14 +304,14 @@ wss.on('connection', (ws) => {
   ws.on('error', () => { if (name) clients.delete(name); });
 });
 
-// ===== Cleanup jobs เก่า ทุก 5 นาที =====
+// ===== Cleanup jobs เก่าตกค้าง (เผื่อ scheduleExpiry ไม่ทำงานเพราะ server รีสตาร์ท) ทุก 5 นาที =====
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of jobs) {
-    if (now - job.createdAt > 600000) { jobs.delete(id); }
+    if (now - job.createdAt > JOB_MAX_AGE + 300000) { jobs.delete(id); }
   }
 }, 300000);
 
 server.listen(PORT, () => {
-  console.log(`✅ savebank-server (v2 — realtime result relay) running on port ${PORT}`);
+  console.log(`✅ savebank-server (v2.1 — realtime result relay + no-silent-expiry) running on port ${PORT}`);
 });
