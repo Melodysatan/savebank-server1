@@ -138,7 +138,17 @@ const server = http.createServer((req, res) => {
             });
           }
 
-          // ลบหลัง 5 นาที (job เสร็จแล้ว ไม่ต้องรอ scheduleExpiry อีก)
+          // ★ ลบเฉพาะ "รูป" (ส่วนที่กินพื้นที่ memory เยอะสุด) ออกก่อน หลังจากส่งให้ครบทุกช่องทางแล้ว
+          // (WS แบบ real-time + polling fallback ที่ BO เช็คทุก ~3 วิ) เก็บแค่ 15 วิให้ชัวร์ว่าถึงแน่ๆ
+          // ตัว job (ข้อความ/สถานะ) ยังอยู่ต่อจนครบ 5 นาทีตามเดิม เผื่อ query ย้อนหลัง
+          if (job.recipientImage) {
+            setTimeout(() => {
+              const j = jobs.get(id);
+              if (j) j.recipientImage = null;
+            }, 15000);
+          }
+
+          // ลบทั้ง job หลัง 5 นาที (job เสร็จแล้ว ไม่ต้องรอ scheduleExpiry อีก)
           setTimeout(() => jobs.delete(id), 300000);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
