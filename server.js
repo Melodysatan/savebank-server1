@@ -172,6 +172,11 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     if (!latest) { res.end(JSON.stringify({ found: false })); return; }
+    // ★ ส่งรูป (base64 ก้อนใหญ่) ให้แค่ "ครั้งแรก" ที่ poll มาเจอ job นี้ เท่านั้น — หลังจากนั้นถือว่าส่งไปแล้ว
+    // (WS เป็นช่องทางหลักที่ push รูปให้อยู่แล้ว polling นี้เป็นแค่ fallback เผื่อ WS หลุด)
+    // ไม่งั้นทุก 3 วิที่ poll ซ้ำ จะโดนส่งรูปเดิมซ้ำไปเรื่อยๆ จนกว่า job จะถูกแทนที่ — กิน bandwidth ฟรีๆ
+    const includeImage = !!latest.recipientImage && !latest.imageDeliveredViaPoll;
+    if (includeImage) latest.imageDeliveredViaPoll = true;
     res.end(JSON.stringify({
       found: true,
       id: latest.id,
@@ -180,7 +185,7 @@ const server = http.createServer((req, res) => {
       bankName: latest.bankName,
       recipientName: latest.recipientName || null,
       recipientBank: latest.recipientBank || null,
-      recipientImage: latest.recipientImage || null,
+      recipientImage: includeImage ? latest.recipientImage : null,
       message: latest.message || null,
       ts: latest.doneAt || Date.now()
     }));
