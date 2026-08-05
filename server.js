@@ -93,7 +93,7 @@ const server = http.createServer((req, res) => {
     const items = [...jobs.values()]
       .filter(j => j.target === name && j.status === 'pending')
       .slice(0, 5)
-      .map(j => ({ id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy, username: j.username || '' }));
+      .map(j => ({ id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy }));
 
     items.forEach(i => { if (jobs.has(i.id)) jobs.get(i.id).status = 'polled'; });
 
@@ -172,11 +172,6 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     if (!latest) { res.end(JSON.stringify({ found: false })); return; }
-    // ★ ส่งรูป (base64 ก้อนใหญ่) ให้แค่ "ครั้งแรก" ที่ poll มาเจอ job นี้ เท่านั้น — หลังจากนั้นถือว่าส่งไปแล้ว
-    // (WS เป็นช่องทางหลักที่ push รูปให้อยู่แล้ว polling นี้เป็นแค่ fallback เผื่อ WS หลุด)
-    // ไม่งั้นทุก 3 วิที่ poll ซ้ำ จะโดนส่งรูปเดิมซ้ำไปเรื่อยๆ จนกว่า job จะถูกแทนที่ — กิน bandwidth ฟรีๆ
-    const includeImage = !!latest.recipientImage && !latest.imageDeliveredViaPoll;
-    if (includeImage) latest.imageDeliveredViaPoll = true;
     res.end(JSON.stringify({
       found: true,
       id: latest.id,
@@ -185,7 +180,7 @@ const server = http.createServer((req, res) => {
       bankName: latest.bankName,
       recipientName: latest.recipientName || null,
       recipientBank: latest.recipientBank || null,
-      recipientImage: includeImage ? latest.recipientImage : null,
+      recipientImage: latest.recipientImage || null,
       message: latest.message || null,
       ts: latest.doneAt || Date.now()
     }));
@@ -198,7 +193,7 @@ const server = http.createServer((req, res) => {
     req.on('data', d => body += d);
     req.on('end', () => {
       try {
-        const { target, accountNo, bankName, sentBy, username } = JSON.parse(body);
+        const { target, accountNo, bankName, sentBy } = JSON.parse(body);
         if (!target || !accountNo || !bankName) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'Missing fields' }));
@@ -206,16 +201,16 @@ const server = http.createServer((req, res) => {
         }
 
         const id = crypto.randomUUID();
-        const job = { id, target, accountNo, bankName, sentBy: sentBy || 'unknown', username: username || '', status: 'pending', createdAt: Date.now() };
+        const job = { id, target, accountNo, bankName, sentBy: sentBy || 'unknown', status: 'pending', createdAt: Date.now() };
         jobs.set(id, job);
 
         // ★ แทนที่ setTimeout ลบทิ้งเฉยๆ ด้วย scheduleExpiry ที่แจ้งผู้ส่งก่อนลบถ้ายังไม่มีผล
         scheduleExpiry(job);
 
-        console.log(`[Send] ${sentBy} → ${target} | ${accountNo} ${bankName}${username ? ' | user=' + username : ''} | id=${id}`);
+        console.log(`[Send] ${sentBy} → ${target} | ${accountNo} ${bankName} | id=${id}`);
 
-        const sentWs = sendWS(target, { type: 'job', id, accountNo, bankName, sentBy: sentBy || 'unknown', username: username || '' });
-        sendWS(target, { type: 'search', id, accountNo, bankName, sentBy: sentBy || 'unknown', username: username || '' });
+        const sentWs = sendWS(target, { type: 'job', id, accountNo, bankName, sentBy: sentBy || 'unknown' });
+        sendWS(target, { type: 'search', id, accountNo, bankName, sentBy: sentBy || 'unknown' });
         if (sentWs) job.status = 'sent-ws';
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -290,8 +285,8 @@ wss.on('connection', (ws) => {
         // ส่ง pending jobs ที่มีอยู่แล้วทันที (กรณีนี้คือชื่อนี้เป็น "target"/ฝั่ง KBiz)
         const pending = [...jobs.values()].filter(j => j.target === name && j.status === 'pending');
         pending.forEach(j => {
-          ws.send(JSON.stringify({ type: 'job', id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy, username: j.username || '' }));
-          ws.send(JSON.stringify({ type: 'search', id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy, username: j.username || '' }));
+          ws.send(JSON.stringify({ type: 'job', id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy }));
+          ws.send(JSON.stringify({ type: 'search', id: j.id, accountNo: j.accountNo, bankName: j.bankName, sentBy: j.sentBy }));
           j.status = 'sent-ws';
         });
 
